@@ -3,13 +3,31 @@ import RealityKit
 import ARKit
 import CoreVideo
 
+struct PlacedMarker: Identifiable {
+    let id = UUID()
+    let position: SIMD3<Float>
+    let distance: Float?
+}
+
+extension simd_float4x4 {
+    var position: SIMD3<Float> {
+        SIMD3(columns.3.x, columns.3.y, columns.3.z)
+    }
+}
+
 struct ARViewContainer: UIViewRepresentable {
     @Binding var distance: Float?
+    @Binding var placedMarkers: [PlacedMarker]
+    var onCaptureDistance: (() -> Void)?
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: UIScreen.main.bounds)
         arView.session.delegate = context.coordinator
         context.coordinator.arView = arView
+
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.handleTap(_:)))
+        arView.addGestureRecognizer(tap)
 
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics = [.smoothedSceneDepth, .sceneDepth]
@@ -26,18 +44,103 @@ struct ARViewContainer: UIViewRepresentable {
         return arView
     }
 
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    func updateUIView(_ uiView: ARView, context: Context) {
+        context.coordinator.syncMarkers(placedMarkers, uiView: uiView)
+    }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(distance: $distance)
+        let c = Coordinator(distance: $distance, placedMarkers: $placedMarkers)
+        c.onCaptureDistance = onCaptureDistance
+        return c
     }
 
     class Coordinator: NSObject, ARSessionDelegate {
         @Binding var distance: Float?
+        @Binding var placedMarkers: [PlacedMarker]
+        var onCaptureDistance: (() -> Void)?
         weak var arView: ARView?
+        var rootAnchor = AnchorEntity(world: .zero)
+        var lastMarkerCount = 0
 
-        init(distance: Binding<Float?>) {
+        init(distance: Binding<Float?>, placedMarkers: Binding<[PlacedMarker]>) {
             self._distance = distance
+            self._placedMarkers = placedMarkers
+        }
+
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let arView = arView else { return }
+            let point = recognizer.location(in: arView)
+            let arH = arView.bounds.height
+            if point.y > arH - 260 {
+                onCaptureDistance?()
+                return
+            }
+            let results = arView.raycast(from: point, allowing: .estimatedPlane, alignment: .any)
+            guard let hit = results.first else { return }
+
+            let pos = hit.worldTransform.position
+            let prev = placedMarkers.last?.position
+            let dist: Float? = prev.map { length(pos - $0) }
+
+            placedMarkers.append(PlacedMarker(position: pos, distance: dist))
+            HapticManager.impact(.light)
+
+            let sphere = makeSphereEntity()
+            sphere.position = pos
+            rootAnchor.addChild(sphere)
+
+            if let prev = prev, let d = dist, d > 0.001 {
+                let line = makeLineEntity(from: prev, to: pos)
+                rootAnchor.addChild(line)
+            }
+        }
+
+        func syncMarkers(_ markers: [PlacedMarker], uiView: ARView) {
+            guard markers.count != lastMarkerCount else { return }
+
+            rootAnchor.children.removeAll()
+            lastMarkerCount = 0
+
+            for (i, marker) in markers.enumerated() {
+                let sphere = makeSphereEntity()
+                sphere.position = marker.position
+                rootAnchor.addChild(sphere)
+
+                if i > 0 {
+                    let prev = markers[i - 1].position
+                    let line = makeLineEntity(from: prev, to: marker.position)
+                    rootAnchor.addChild(line)
+                }
+            }
+            lastMarkerCount = markers.count
+
+            if !rootAnchor.isAnchored {
+                uiView.scene.addAnchor(rootAnchor)
+            }
+        }
+
+        private func makeSphereEntity() -> ModelEntity {
+            let mesh = MeshResource.generateSphere(radius: 0.012)
+            let material = SimpleMaterial(color: .systemBlue, isMetallic: true)
+            return ModelEntity(mesh: mesh, materials: [material])
+        }
+
+        private func makeLineEntity(from: SIMD3<Float>, to: SIMD3<Float>) -> ModelEntity {
+            let direction = to - from
+            let distance = length(direction)
+            guard distance > 0.001 else { return ModelEntity() }
+            let mid = (from + to) / 2
+
+            let mesh = MeshResource.generateCylinder(height: distance, radius: 0.003)
+            let material = SimpleMaterial(color: .white, isMetallic: false)
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.position = mid
+
+            let up = SIMD3<Float>(0, 1, 0)
+            let dir = normalize(direction)
+            entity.orientation = simd_quatf(from: up, to: dir)
+
+            return entity
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -72,7 +175,7 @@ struct ARViewContainer: UIViewRepresentable {
             }
 
             let normalized = CGPoint(x: viewCenter.x / viewSize.width,
-                                     y: viewCenter.y / viewSize.height)
+                                      y: viewCenter.y / viewSize.height)
             let transform = frame.displayTransform(for: .portrait, viewportSize: viewSize)
             let imagePoint = normalized.applying(transform)
 

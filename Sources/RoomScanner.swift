@@ -4,31 +4,22 @@ import ARKit
 
 struct RoomScanner: UIViewRepresentable {
     @Binding var meshAnchors: [ARMeshAnchor]
+    @Binding var restartTrigger: UUID
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
         arView.session.delegate = context.coordinator
         context.coordinator.arView = arView
-
-        let config = ARWorldTrackingConfiguration()
-        config.sceneReconstruction = .meshWithClassification
-        config.environmentTexturing = .automatic
-        config.frameSemantics = [.smoothedSceneDepth, .sceneDepth]
-        config.isLightEstimationEnabled = true
-        config.providesAudioData = false
-
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
-            config.sceneReconstruction = .meshWithClassification
-        }
-
-        arView.session.run(config)
-
-        arView.environment.sceneUnderstanding.options.insert(.receivesLighting)
-
+        context.coordinator.runSession(arView)
         return arView
     }
 
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    func updateUIView(_ uiView: ARView, context: Context) {
+        if context.coordinator.lastTrigger != restartTrigger {
+            context.coordinator.lastTrigger = restartTrigger
+            context.coordinator.runSession(uiView)
+        }
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(meshAnchors: $meshAnchors)
@@ -37,9 +28,26 @@ struct RoomScanner: UIViewRepresentable {
     class Coordinator: NSObject, ARSessionDelegate {
         @Binding var meshAnchors: [ARMeshAnchor]
         weak var arView: ARView?
+        var lastTrigger: UUID?
 
         init(meshAnchors: Binding<[ARMeshAnchor]>) {
             self._meshAnchors = meshAnchors
+        }
+
+        func runSession(_ arView: ARView) {
+            let config = ARWorldTrackingConfiguration()
+            config.sceneReconstruction = .meshWithClassification
+            config.environmentTexturing = .automatic
+            config.frameSemantics = [.smoothedSceneDepth, .sceneDepth]
+            config.isLightEstimationEnabled = true
+            config.providesAudioData = false
+
+            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+                config.sceneReconstruction = .meshWithClassification
+            }
+
+            arView.session.run(config, options: [.removeExistingAnchors, .resetTracking])
+            arView.environment.sceneUnderstanding.options.insert(.receivesLighting)
         }
 
         func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {

@@ -1,13 +1,14 @@
 import ARKit
-import ModelIO
-import MetalKit
+import SceneKit
 
 struct MeshData {
     let vertices: [Float]
     let normals: [Float]
     let indices: [UInt32]
-    let transform: simd_float4x4
+    let vertexCount: Int
+    let faceCount: Int
     let anchorID: UUID
+    let transform: simd_float4x4
 }
 
 struct MeshExporter {
@@ -19,124 +20,122 @@ struct MeshExporter {
         var normals = [Float]()
         var indices = [UInt32]()
 
-        autoreleasepool {
-            let vCount = geometry.vertices.count
-            let vStride = geometry.vertices.stride
-            let vPtr = geometry.vertices.buffer.contents().assumingMemoryBound(to: Float.self)
+        let vCount = geometry.vertices.count
+        let vStride = geometry.vertices.stride
+        let vPtr = geometry.vertices.buffer.contents().assumingMemoryBound(to: Float.self)
 
-            vertices.reserveCapacity(vCount * 3)
-            for i in 0..<vCount {
-                let off = i * vStride / MemoryLayout<Float>.stride
-                let pos = simd_float4(vPtr[off], vPtr[off + 1], vPtr[off + 2], 1)
-                let world = anchor.transform * pos
-                vertices.append(world.x)
-                vertices.append(world.y)
-                vertices.append(world.z)
+        vertices.reserveCapacity(vCount * 3)
+        for i in 0..<vCount {
+            let off = i * vStride / MemoryLayout<Float>.stride
+            var x = vPtr[off], y = vPtr[off + 1], z = vPtr[off + 2]
+            if !x.isFinite { x = 0 }
+            if !y.isFinite { y = 0 }
+            if !z.isFinite { z = 0 }
+            vertices.append(x)
+            vertices.append(y)
+            vertices.append(z)
+        }
+
+        let nCount = geometry.normals.count
+        let nStride = geometry.normals.stride
+        let nPtr = geometry.normals.buffer.contents().assumingMemoryBound(to: Float.self)
+
+        normals.reserveCapacity(vCount * 3)
+        for i in 0..<vCount {
+            if i < nCount {
+                let off = i * nStride / MemoryLayout<Float>.stride
+                var dx = nPtr[off], dy = nPtr[off + 1], dz = nPtr[off + 2]
+                if !dx.isFinite { dx = 0 }
+                if !dy.isFinite { dy = 0 }
+                if !dz.isFinite { dz = 0 }
+                let len = sqrt(dx * dx + dy * dy + dz * dz)
+                if len > 0 { dx /= len; dy /= len; dz /= len }
+                normals.append(dx); normals.append(dy); normals.append(dz)
+            } else {
+                normals.append(0); normals.append(1); normals.append(0)
             }
+        }
 
-            let nCount = geometry.normals.count
-            let nStride = geometry.normals.stride
-            let nPtr = geometry.normals.buffer.contents().assumingMemoryBound(to: Float.self)
+        let fCount = geometry.faces.count
+        let bpi = geometry.faces.bytesPerIndex
+        let fPtr = geometry.faces.buffer.contents()
 
-            normals.reserveCapacity(vCount * 3)
-            for i in 0..<vCount {
-                if i < nCount {
-                    let off = i * nStride / MemoryLayout<Float>.stride
-                    let dx = nPtr[off], dy = nPtr[off + 1], dz = nPtr[off + 2]
-                    let len = sqrt(dx * dx + dy * dy + dz * dz)
-                    if len > 0 {
-                        normals.append(dx / len)
-                        normals.append(dy / len)
-                        normals.append(dz / len)
-                    } else {
-                        normals.append(0); normals.append(1); normals.append(0)
-                    }
-                } else {
-                    normals.append(0); normals.append(1); normals.append(0)
-                }
+        var rawIndices = [UInt32]()
+        let totalIndices = geometry.faces.buffer.length / bpi
+        rawIndices.reserveCapacity(totalIndices)
+        for i in 0..<totalIndices {
+            let off = i * bpi
+            switch bpi {
+            case 4:  rawIndices.append(fPtr.load(fromByteOffset: off, as: UInt32.self))
+            case 2:  rawIndices.append(UInt32(fPtr.load(fromByteOffset: off, as: UInt16.self)))
+            default: rawIndices.append(UInt32(fPtr.load(fromByteOffset: off, as: UInt8.self)))
             }
+        }
 
-            let fCount = geometry.faces.count
-            let bpi = geometry.faces.bytesPerIndex
-            let fPtr = geometry.faces.buffer.contents()
+        indices = Array(rawIndices.prefix(fCount * 3))
 
-            indices.reserveCapacity(fCount * 3)
-            for i in 0..<fCount * 3 {
-                let off = i * bpi
-                switch bpi {
-                case 4:  indices.append(fPtr.load(fromByteOffset: off, as: UInt32.self))
-                case 2:  indices.append(UInt32(fPtr.load(fromByteOffset: off, as: UInt16.self)))
-                default: indices.append(UInt32(fPtr.load(fromByteOffset: off, as: UInt8.self)))
-                }
+        for idx in indices {
+            if idx >= UInt32(vCount) {
+                indices = []
+                break
             }
         }
 
         return MeshData(vertices: vertices, normals: normals, indices: indices,
-                        transform: anchor.transform, anchorID: anchor.identifier)
+                        vertexCount: vCount, faceCount: fCount,
+                        anchorID: anchor.identifier, transform: anchor.transform)
     }
 
     static func exportUSDZ(meshes: [MeshData]) -> (url: URL?, errors: [String]) {
-        let asset = MDLAsset()
+        let scene = SCNScene()
         var errors = [String]()
 
         for mesh in meshes {
+            print("[MeshExporter] anchor=\(mesh.anchorID) v=\(mesh.vertexCount) f=\(mesh.faceCount) idx=\(mesh.indices.count)")
+
             guard mesh.vertices.count >= 9 else {
-                errors.append("Anchor \(mesh.anchorID): too few vertices")
-                continue
+                errors.append("Anchor \(mesh.anchorID): too few vertices"); continue
             }
             guard mesh.indices.count >= 3 else {
-                errors.append("Anchor \(mesh.anchorID): no face indices")
-                continue
+                errors.append("Anchor \(mesh.anchorID): no face indices"); continue
             }
 
             let vCount = mesh.vertices.count / 3
 
-            var interleaved = [Float]()
-            interleaved.reserveCapacity(vCount * 6)
+            var verts = [SCNVector3]()
+            verts.reserveCapacity(vCount)
+            var norms = [SCNVector3]()
+            norms.reserveCapacity(vCount)
             for i in 0..<vCount {
                 let vi = i * 3
-                interleaved.append(mesh.vertices[vi])
-                interleaved.append(mesh.vertices[vi + 1])
-                interleaved.append(mesh.vertices[vi + 2])
-                interleaved.append(mesh.normals[vi])
-                interleaved.append(mesh.normals[vi + 1])
-                interleaved.append(mesh.normals[vi + 2])
+                verts.append(SCNVector3(mesh.vertices[vi], mesh.vertices[vi+1], mesh.vertices[vi+2]))
+                norms.append(SCNVector3(mesh.normals[vi], mesh.normals[vi+1], mesh.normals[vi+2]))
             }
 
-            let vbData = Data(bytes: interleaved,
-                              count: interleaved.count * MemoryLayout<Float>.stride)
-            let ibData = Data(bytes: mesh.indices,
-                              count: mesh.indices.count * MemoryLayout<UInt32>.stride)
+            let vertexSource = SCNGeometrySource(vertices: verts)
+            let normalSource = SCNGeometrySource(normals: norms)
 
-            let vb = MDLMeshBufferData(type: .vertex, data: vbData)
-            let ib = MDLMeshBufferData(type: .index, data: ibData)
+            let indexData = Data(bytes: mesh.indices,
+                                 count: mesh.indices.count * MemoryLayout<UInt32>.stride)
+            let element = SCNGeometryElement(
+                data: indexData,
+                primitiveType: .triangles,
+                primitiveCount: mesh.indices.count / 3,
+                bytesPerIndex: MemoryLayout<UInt32>.stride)
 
-            let desc = MDLVertexDescriptor()
-            desc.attributes[0] = MDLVertexAttribute(
-                name: MDLVertexAttributePosition,
-                format: .float3, offset: 0, bufferIndex: 0)
-            desc.attributes[1] = MDLVertexAttribute(
-                name: MDLVertexAttributeNormal,
-                format: .float3, offset: 12, bufferIndex: 0)
-            desc.layouts[0] = MDLVertexBufferLayout(stride: 24)
+            let geometry = SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
 
-            let submesh = MDLSubmesh(
-                indexBuffer: ib,
-                indexCount: mesh.indices.count,
-                indexType: .uInt32,
-                geometryType: .triangles,
-                material: nil)
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor(white: 0.8, alpha: 1.0)
+            material.isDoubleSided = true
+            geometry.materials = [material]
 
-            let mdlMesh = MDLMesh(
-                vertexBuffer: vb,
-                vertexCount: vCount,
-                descriptor: desc,
-                submeshes: [submesh])
-
-            asset.add(mdlMesh)
+            let node = SCNNode(geometry: geometry)
+            node.simdTransform = mesh.transform
+            scene.rootNode.addChildNode(node)
         }
 
-        guard asset.count > 0 else {
+        guard scene.rootNode.childNodes.count > 0 else {
             errors.append("No meshes could be processed")
             return (nil, errors)
         }
@@ -145,11 +144,11 @@ struct MeshExporter {
             .appendingPathComponent("RoomScan_\(Int(Date().timeIntervalSince1970))")
             .appendingPathExtension("usdz")
 
-        do {
-            try asset.export(to: url)
+        let success = scene.write(to: url, options: nil, delegate: nil, progressHandler: nil)
+        if success {
             return (url, errors)
-        } catch {
-            errors.append("USDZ export failed: \(error.localizedDescription)")
+        } else {
+            errors.append("USDZ export failed via SCNScene")
             return (nil, errors)
         }
     }
