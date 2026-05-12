@@ -27,6 +27,8 @@
         <key>UIColorName</key>
         <string>LaunchBackground</string>
     </dict>
+    <key>UIRequiresFullScreen</key>
+    <true/>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UIRequiredDeviceCapabilities</key>

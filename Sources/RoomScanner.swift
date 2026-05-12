@@ -50,6 +50,13 @@ struct RoomScanner: UIViewRepresentable {
             arView.environment.sceneUnderstanding.options.insert(.receivesLighting)
         }
 
+        func sessionWasInterrupted(_ session: ARSession) {}
+
+        func sessionInterruptionEnded(_ session: ARSession) {
+            guard let arView = arView else { return }
+            runSession(arView)
+        }
+
         func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
             let newAnchors = anchors.compactMap { $0 as? ARMeshAnchor }
             meshAnchors.append(contentsOf: newAnchors)

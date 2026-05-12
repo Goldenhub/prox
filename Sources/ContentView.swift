@@ -24,6 +24,7 @@ struct SegmentInfo: Identifiable {
 
 struct ContentView: View {
     @State private var distance: Float?
+    @State private var depthConfidence: Int?
     @State private var mode: AppMode = .measure
     @State private var meshAnchors: [ARMeshAnchor] = []
     @State private var isExporting = false
@@ -40,17 +41,55 @@ struct ContentView: View {
     @State private var pendingFreezeDistance: Float?
     @State private var editingLabelID: UUID?
     @State private var showSegmentSheet = false
+    @State private var isLiDARSupported: Bool?
     @State private var viewingHistorySegments: CapturedDistance?
     @State private var activeMeasurementID: UUID?
     @State private var selectedBadge: CapturedDistance?
     @State private var showBadgeActions = false
     @State private var showMarkersActions = false
+    @State private var freezeAnimating = false
+    @State private var confirmClearCaptured = false
+    @AppStorage("hasSeenHelp") private var hasSeenHelp = false
 
     var body: some View {
+        Group {
+            if isLiDARSupported == false {
+                unsupportedView
+            } else {
+                mainView
+            }
+        }
+        .task {
+            isLiDARSupported = ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth)
+        }
+        .onAppear {
+            if !hasSeenHelp {
+                hasSeenHelp = true
+                showHelp = true
+            }
+        }
+    }
+
+    private var unsupportedView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 48))
+                .foregroundColor(.orange)
+            Text("LiDAR Required")
+                .font(.title.weight(.bold))
+            Text("Prox needs a device with a LiDAR scanner (iPhone 12–16 Pro / iPad Pro).")
+                .font(.body)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 40)
+        }
+    }
+
+    private var mainView: some View {
         ZStack {
             switch mode {
             case .measure:
-                ARViewContainer(distance: $distance, placedMarkers: $placedMarkers, onCaptureDistance: onDistanceTap)
+                ARViewContainer(distance: $distance, confidence: $depthConfidence, placedMarkers: $placedMarkers, onCaptureDistance: onDistanceTap)
                     .edgesIgnoringSafeArea(.all)
                     .transition(.opacity)
             case .scan:
@@ -73,7 +112,7 @@ struct ContentView: View {
                 Spacer()
 
                 if mode == .measure {
-                    DistanceOverlay(distance: distance, onCapture: onDistanceTap)
+                    DistanceOverlay(distance: distance, confidence: depthConfidence, onCapture: onDistanceTap)
                         .padding(.bottom, distance != nil ? 60 : 120)
 
                     if distance != nil {
@@ -197,6 +236,8 @@ struct ContentView: View {
                 .background(.blue, in: Circle())
                 .shadow(radius: 4)
         }
+        .scaleEffect(freezeAnimating ? 1.3 : 1)
+        .animation(.spring(response: 0.2, dampingFraction: 0.4), value: freezeAnimating)
     }
 
     private var capturedList: some View {
@@ -210,12 +251,16 @@ struct ContentView: View {
                 .padding(.horizontal, 16)
             }
 
-            Button(action: { capturedDistances = [] }) {
+            Button(action: { confirmClearCaptured = true }) {
                 Image(systemName: "trash")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
                     .padding(6)
                     .background(.ultraThinMaterial, in: Circle())
+            }
+            .confirmationDialog("Clear all measurements?", isPresented: $confirmClearCaptured) {
+                Button("Clear All", role: .destructive) { capturedDistances = [] }
+                Button("Cancel", role: .cancel) {}
             }
             .padding(.trailing, 12)
         }
@@ -291,6 +336,10 @@ struct ContentView: View {
     private func captureDistance() {
         guard let d = distance else { return }
         HapticManager.impact(.light)
+        freezeAnimating = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            freezeAnimating = false
+        }
         pendingFreezeDistance = d
         labelText = ""
         editingLabelID = nil
@@ -548,14 +597,17 @@ struct HelpView: View {
         NavigationStack {
             List {
                 Section("Measure Mode") {
-                    LabeledContent("Crosshair", value: "Point center dot at any surface to see live distance")
-                    LabeledContent("Freeze", value: "Tap the target button to save a distance reading")
-                    LabeledContent("Markers", value: "Tap anywhere on screen to place a 3D marker on that surface")
-                    LabeledContent("Clear", value: "Use trash icons to clear saved readings or markers")
+                    LabeledContent("Crosshair", value: "Point the center dot at any surface to see live distance. Green/yellow/red dot shows depth confidence")
+                    LabeledContent("Freeze", value: "Tap the target button or the distance number to save a reading")
+                    LabeledContent("Markers", value: "Tap anywhere on a surface to place a 3D marker. Consecutive markers are connected with a line")
+                    LabeledContent("Marker total", value: "Tap the points badge to view individual segment lengths. Long press for Save (stores total) or Delete")
+                    LabeledContent("Saved items", value: "Tap a saved measurement to see its 3D markers and segments. Long press to Rename or Delete")
+                    LabeledContent("Live capture", value: "When markers are placed, tapping the distance number opens the inter-point lengths list")
                 }
 
                 Section("Scan Mode") {
                     LabeledContent("Scan", value: "Move your phone slowly around the room. ARKit builds a 3D mesh in real time")
+                    LabeledContent("Restart", value: "Tap the red restart button to clear the scan and start fresh")
                     LabeledContent("Export", value: "Tap Export USDZ when ready. The file saves and opens a share sheet")
                     LabeledContent("Auto-clear", value: "After successful export, the scan is automatically cleared")
                 }

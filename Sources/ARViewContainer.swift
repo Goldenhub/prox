@@ -17,6 +17,7 @@ extension simd_float4x4 {
 
 struct ARViewContainer: UIViewRepresentable {
     @Binding var distance: Float?
+    @Binding var confidence: Int?
     @Binding var placedMarkers: [PlacedMarker]
     var onCaptureDistance: (() -> Void)?
 
@@ -24,6 +25,7 @@ struct ARViewContainer: UIViewRepresentable {
         let arView = ARView(frame: UIScreen.main.bounds)
         arView.session.delegate = context.coordinator
         context.coordinator.arView = arView
+        confidence = nil
 
         let tap = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleTap(_:)))
@@ -49,21 +51,23 @@ struct ARViewContainer: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        let c = Coordinator(distance: $distance, placedMarkers: $placedMarkers)
+        let c = Coordinator(distance: $distance, confidence: $confidence, placedMarkers: $placedMarkers)
         c.onCaptureDistance = onCaptureDistance
         return c
     }
 
     class Coordinator: NSObject, ARSessionDelegate {
         @Binding var distance: Float?
+        @Binding var confidence: Int?
         @Binding var placedMarkers: [PlacedMarker]
         var onCaptureDistance: (() -> Void)?
         weak var arView: ARView?
         var rootAnchor = AnchorEntity(world: .zero)
         var lastMarkerCount = 0
 
-        init(distance: Binding<Float?>, placedMarkers: Binding<[PlacedMarker]>) {
+        init(distance: Binding<Float?>, confidence: Binding<Int?>, placedMarkers: Binding<[PlacedMarker]>) {
             self._distance = distance
+            self._confidence = confidence
             self._placedMarkers = placedMarkers
         }
 
@@ -143,6 +147,24 @@ struct ARViewContainer: UIViewRepresentable {
             return entity
         }
 
+        func sessionWasInterrupted(_ session: ARSession) {
+            DispatchQueue.main.async { self.distance = nil }
+        }
+
+        func sessionInterruptionEnded(_ session: ARSession) {
+            guard let arView = arView else { return }
+            let config = ARWorldTrackingConfiguration()
+            config.frameSemantics = [.smoothedSceneDepth, .sceneDepth]
+            config.isLightEstimationEnabled = false
+            config.providesAudioData = false
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+                config.frameSemantics.insert(.smoothedSceneDepth)
+            } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                config.frameSemantics.insert(.sceneDepth)
+            }
+            arView.session.run(config, options: [.removeExistingAnchors, .resetTracking])
+        }
+
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth,
                   let arView = arView else {
@@ -195,8 +217,19 @@ struct ARViewContainer: UIViewRepresentable {
 
             if val.isFinite && val > 0.1 {
                 distance = val
+                if let confidenceMap = depthData.confidenceMap {
+                    CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
+                    let confPtr = CVPixelBufferGetBaseAddress(confidenceMap)?.assumingMemoryBound(to: UInt8.self)
+                    let confBytes = CVPixelBufferGetBytesPerRow(confidenceMap)
+                    if let confPtr {
+                        let confVal = confPtr[dy * confBytes + dx]
+                        confidence = Int(confVal)
+                    }
+                    CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly)
+                }
             } else {
                 distance = nil
+                confidence = nil
             }
         }
 

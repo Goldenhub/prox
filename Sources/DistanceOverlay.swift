@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DistanceOverlay: View {
     let distance: Float?
+    let confidence: Int?
     var onCapture: (() -> Void)?
 
     var body: some View {
@@ -20,10 +21,17 @@ struct DistanceOverlay: View {
             }
             .buttonStyle(.plain)
 
-            Text(distance != nil ? unitLabel : "")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
-                .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+            HStack(spacing: 6) {
+                if let c = confidence {
+                    Circle()
+                        .fill(confidenceColor(c))
+                        .frame(width: 8, height: 8)
+                }
+                Text(distance != nil ? unitLabel : "")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+                    .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+            }
         }
     }
 
@@ -63,6 +71,14 @@ struct DistanceOverlay: View {
         switch unit {
         case .metric: return "meters"
         case .imperial: return "feet / inches"
+        }
+    }
+
+    private func confidenceColor(_ c: Int) -> Color {
+        switch c {
+        case 2: return .green
+        case 1: return .yellow
+        default: return .red
         }
     }
 
