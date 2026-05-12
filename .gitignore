@@ -1,7 +1,11 @@
 *.xcuserdata
 *.xcuserstate
+xcuserdata/
+xcuserstate
 DerivedData/
 .build/
 *.ipa
 *.dSYM.zip
 *.dSYM
+.DS_Store
+Assets.xcassets/icon_new.png
