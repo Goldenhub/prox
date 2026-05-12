@@ -25,7 +25,7 @@ struct ARViewContainer: UIViewRepresentable {
         let arView = ARView(frame: UIScreen.main.bounds)
         arView.session.delegate = context.coordinator
         context.coordinator.arView = arView
-        confidence = nil
+        DispatchQueue.main.async { confidence = nil }
 
         let tap = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleTap(_:)))

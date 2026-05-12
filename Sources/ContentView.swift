@@ -161,8 +161,8 @@ struct ContentView: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .onChange(of: mode) { HapticManager.selection() }
-        .onChange(of: showSegmentSheet) { showing in
+        .onChange(of: mode) { _, _ in HapticManager.selection() }
+        .onChange(of: showSegmentSheet) { _, showing in
             if !showing, activeMeasurementID != nil {
                 placedMarkers = []
                 activeMeasurementID = nil
