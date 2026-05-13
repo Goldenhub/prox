@@ -1,14 +1,14 @@
 # Prox
 
-**Proximity, at a glance.** Point and see exact distance to any surface. Then scan your room into a 3D model — all powered by LiDAR.
+**Proximity at a glance.** Point and see exact distance to any surface. Then scan your room into a 3D model - all powered by LiDAR.
 
 Two modes:
-- **Measure** — real-time crosshair with live distance readout in meters
-- **Scan** — build a 3D mesh of your environment and export as USDZ
+- **Measure** - real-time crosshair with live distance readout in meters
+- **Scan** - build a 3D mesh of your environment and export as USDZ
 
 ## Requirements
 
-iPhone 12 Pro+ or iPad Pro (2020+). Simulator won't work — LiDAR is real hardware only.
+iPhone 12 Pro+ or iPad Pro (2020+). Simulator won't work - LiDAR is real hardware only.
 
 Xcode 15.4+, iOS 17.0+, free Apple Developer account.
 
